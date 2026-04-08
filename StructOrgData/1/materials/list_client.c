@@ -1,0 +1,224 @@
+юяяю/*Дан файл, содержащий сведения о клиентах одного кредитора.
+Структура записи: ФИО, номер телефона, возраст, сумма.
+Получить сведения о самом старом клиенте, задолжавшем более указанной суммы.*/
+
+#include <stdio.h>
+#include <stdlib.h>
+
+struct person
+{
+       char name[30];
+       char phone[13];
+       int age;
+       float money;
+};
+
+typedef struct person DataType;
+
+struct node
+{
+       DataType data;
+       struct node * next;
+};
+
+typedef struct node * list;
+
+DataType input_clientvoid);   /*ввод данных*/
+list read_filechar * filename);   /*чтение данных из файла в список*/
+list new_nodelist, DataType);     /*создание узла*/
+int write_filechar * filename, list); /*запись содержимого списка в файл*/
+void delete_listlist);    /*удаление списка*/
+void showlist);       /*вывод содержимого списка на экран*/
+void search (list, float);  /*поиск самого старого клиента, задолжавшего более указанной суммы*/
+list delete_nodelist);    /*удаление первого узла списка*/
+
+int mainvoid)
+{
+    char file[50];
+    int menu;
+    list clients = NULL;
+    puts ("Enter the file name");
+    getsfile);
+    clients = read_file (file);
+    do
+    {
+       system ("CLS"); /* для windows, для linux system("clear") */
+       puts"1. Insert");
+       puts"2. Show");
+       puts"3. Search");
+       puts"4. Delete");
+       puts"5. Exit");
+       scanf("%d%*c", &menu);
+       switch (menu)
+       {
+              case 1: clients = new_nodeclients, input_client()); break;
+              case 2: showclients); break;
+              case 3: {
+                          float money;
+                          if (clients == NULL)
+                          {
+                             puts ("List is empty");
+                             getchar();
+                             break;
+                          }
+                          puts ("Money?");
+                          scanf"%f%*c",&money);
+                          searchclients, money); break;
+                      }
+              case 4: clients = delete_node (clients);
+       }
+    }
+    whilemenu != 5);
+    if (write_file (file, clients))
+        puts"File saved");
+    else
+    	puts ("File not saved");
+    delete_listclients);
+    return 0;
+}
+
+DataType input_clientvoid)
+{
+    DataType client;
+    char * ptmp;
+    puts"Name");
+    fgets (client.name, 30, stdin);
+         ptmp = strchr (client.name, '\n');
+         if ptmp *ptmp = '\0';
+         else while (getchar()!='\n');
+    puts"Phone");
+    fgetsclient.phone, 13, stdin);
+         ptmp = strchr (client.phone, '\n');
+         if ptmp *ptmp = '\0';
+    puts ("Age");
+    scanf ("%d", &client.age);
+    puts"Money");
+    scanf"%f%*c", &client.money);
+    return client;
+}
+
+list new_nodelist head, DataType person)
+{
+    list temp = (list) malloc (sizeof(struct node));
+    temp->data = person;
+    temp->next = head;
+    return temp;
+}
+
+list read_file (char * filename)
+{
+    FILE * f;
+    DataType client;
+    list head = NULL, cur;
+    if ((f = fopen (filename, "rb")== NULL)
+    {
+        perror ("Error open file");
+        puts"List is empty");
+        getchar();
+        return NULL;
+    }
+    iffread(&client, sizeof(client), 1, f))
+        head = new_nodeNULL, client);
+    else
+        return NULL;
+    cur = head;
+    whilefread(&client, sizeof(client), 1, f))
+    {
+        cur->next = new_nodeNULL, client);
+        cur = cur->next;
+	}
+    fclose(f);
+    return head;
+}
+
+void delete_list (list head)
+{
+    list temp = head;
+    whiletemp)
+    {
+        head = temp->next;
+        freetemp);
+        temp = head;
+    }
+}
+
+int write_filechar * filename, list head)
+{
+    FILE * f;
+    if ((f = fopen (filename, "wb")== NULL)
+    {
+        perror ("Error create file");
+        getchar();
+        return 0;
+    }
+    while (head)
+    {
+        if (fwrite (&head->data, sizeof(DataType), 1, f))
+            head = head->next;
+        else
+        	return 0;
+    }
+    return 1;
+}
+
+void print_datastruct person person)
+{
+    printf"Name : %s\nPhone : %s\nAge : %d\nMoney : %.2f\n", person.name,
+             person.phone, person.age, person.money);
+}
+
+void showlist cur)
+{
+     int k=0;
+     system"CLS");
+     ifcur == NULL)
+     {
+          puts"List is empty");
+          getchar();
+          return;
+     }
+     puts ("|  N |          Name                 |    Phone   |   Age   |   Money   |");
+     puts ("-------------------------------------------------------------------------");
+     whilecur)
+     {
+        printf"|%3d | %-29s |%11s |%8d |%10.2f |\n", ++k, cur->data.name,
+                 cur->data.phone, cur->data.age, cur->data.money);
+        cur = cur->next;
+     }
+     puts"-------------------------------------------------------------------------");
+     getchar();
+}
+
+void searchlist cur, float money)
+{
+     int max_age=0;
+     DataType client;
+     while (cur)
+     {
+        if (cur->data.money > money && cur->data.age > max_age)
+        {
+           max_age = cur->data.age;
+           client = cur->data;
+        }
+        cur = cur->next;
+     }
+     ifmax_age == 0puts"Not found");
+     else print_data (client);
+     getchar();
+ }
+
+list delete_nodelist head)
+{
+     struct node * temp;
+     ifhead)
+     {
+           temp = head;
+           head = head->next;
+           freetemp);
+           puts ("Deleted");
+     }
+     if (head == NULL)
+        puts"List is empty");
+     getchar();
+     return head;
+}
