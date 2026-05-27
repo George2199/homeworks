@@ -140,6 +140,19 @@ T readVal(const std::string& prompt) {
     return v;
 }
 
+template<>
+char readVal<char>(const std::string& prompt) {
+    int v;
+    std::cout << prompt;
+    while (!(std::cin >> v) || v < -128 || v > 127) {
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::cout << "Invalid (-128..127). " << prompt;
+    }
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    return static_cast<char>(v);
+}
+
 template<typename T>
 void dequeMenu(InputRestrictedDeque<T>& dq, const std::string& typeName) {
     bool running = true;
@@ -217,23 +230,50 @@ int main() {
     std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
     // ── Part 2 ──────────────────────────────────────────────────────
-    // Two instances of the template class with different types
-    InputRestrictedDeque<int>    dqInt    = {1, 2, 3, 4, 5};
+    std::cout << "\n=== Part 2: InputRestrictedDeque<T> constructors demo ===\n\n";
+
+    // Constructor with parameters
+    InputRestrictedDeque<char>   dqChar   = {(char)10, (char)20, (char)30};
     InputRestrictedDeque<double> dqDouble = {1.1, 2.2, 3.3};
+    std::cout << "Constructed dqChar   "; dqChar.print();
+    std::cout << "Constructed dqDouble "; dqDouble.print();
+
+    // Copy constructor
+    InputRestrictedDeque<char> dqCharCopy(dqChar);
+    std::cout << "Copy of dqChar       "; dqCharCopy.print();
+
+    // Move constructor
+    InputRestrictedDeque<char> dqCharMoved(std::move(dqCharCopy));
+    std::cout << "Moved from copy      "; dqCharMoved.print();
+    std::cout << "Source after move    "; dqCharCopy.print();
+
+    // Copy assignment
+    InputRestrictedDeque<double> dqDoubleCopy = {9.9};
+    dqDoubleCopy = dqDouble;
+    std::cout << "Copy-assigned double "; dqDoubleCopy.print();
+
+    // Move assignment
+    InputRestrictedDeque<double> dqDoubleMoved = {0.0};
+    dqDoubleMoved = std::move(dqDoubleCopy);
+    std::cout << "Move-assigned double "; dqDoubleMoved.print();
+    std::cout << "Source after move    "; dqDoubleCopy.print();
+
+    std::cout << "\nPress Enter to continue to interactive menu...";
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
     bool running = true;
     while (running) {
         std::cout << "\n+================================+\n";
         std::cout <<   "| Part 2: Deque Template Menu   |\n";
         std::cout <<   "+================================+\n";
-        std::cout <<   "| 1. Deque<int>                 |\n";
+        std::cout <<   "| 1. Deque<char>                |\n";
         std::cout <<   "| 2. Deque<double>              |\n";
         std::cout <<   "| 0. Exit                       |\n";
         std::cout <<   "+================================+\n";
         int choice = readInt("Choice: ");
         switch (choice) {
         case 0: running = false; break;
-        case 1: dequeMenu(dqInt,    "int");    break;
+        case 1: dequeMenu(dqChar,   "char");   break;
         case 2: dequeMenu(dqDouble, "double"); break;
         default: std::cout << "Unknown option.\n";
         }
