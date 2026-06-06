@@ -1,5 +1,6 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
+#include <SDL2/SDL_image.h>
 #include <cmath>
 #include <vector>
 #include <string>
@@ -65,50 +66,7 @@ static bool initAudio() {
     SDL_PauseAudioDevice(g_audio,0); return true;
 }
 
-// ─── Wheel sprite ────────────────────────────────────────────────────
-class WheelSprite {
-    std::vector<SDL_Texture*> frames;
-    int   cur=0;
-    float timer=0.f, frameDur=0.07f;
-public:
-    int sz=0;
-    void build(SDL_Renderer* r, int rad, int nf) {
-        sz=rad*2+2;
-        for (int f=0;f<nf;++f) {
-            SDL_Texture* tex=SDL_CreateTexture(r,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_TARGET,sz,sz);
-            SDL_SetTextureBlendMode(tex,SDL_BLENDMODE_BLEND);
-            SDL_SetRenderTarget(r,tex);
-            SDL_SetRenderDrawColor(r,0,0,0,0); SDL_RenderClear(r);
-            int cx=sz/2, cy=sz/2;
-            SDL_SetRenderDrawColor(r,DARK,DARK,DARK,255);
-            for (int dy=-rad;dy<=rad;++dy)
-                for (int dx=-rad;dx<=rad;++dx) {
-                    int d2=dx*dx+dy*dy, inn=(rad-3)*(rad-3);
-                    if (d2>=inn&&d2<=rad*rad) SDL_RenderDrawPoint(r,cx+dx,cy+dy);
-                }
-            float ba=f*(float)M_PI/(2.f*nf);
-            for (int s=0;s<4;++s) {
-                float a=ba+s*(float)M_PI/2.f;
-                SDL_RenderDrawLine(r,cx,cy,cx+(int)((rad-4)*std::cos(a)),cy+(int)((rad-4)*std::sin(a)));
-            }
-            fillRect(r,cx-2,cy-2,4,4);
-            SDL_SetRenderTarget(r,nullptr);
-            frames.push_back(tex);
-        }
-    }
-    void update(float dt, float speed) {
-        // Spin rate proportional to speed — significantly faster at higher speeds
-        frameDur = std::max(0.012f, 48.f / speed);
-        timer += dt;
-        if (timer>=frameDur) { timer=0; cur=(cur+1)%(int)frames.size(); }
-    }
-    void draw(SDL_Renderer* r, int cx, int cy) const {
-        if (frames.empty()) return;
-        SDL_Rect dst{cx-sz/2, cy-sz/2, sz, sz};
-        SDL_RenderCopy(r, frames[cur], nullptr, &dst);
-    }
-    ~WheelSprite() { for (auto* t:frames) SDL_DestroyTexture(t); }
-};
+
 
 // ─── Obstacle ────────────────────────────────────────────────────────
 // type: 0=small cactus  1=tall cactus  2=double cactus
@@ -187,33 +145,74 @@ public:
 
 // ─── Player ──────────────────────────────────────────────────────────
 class Player {
+    // ── Sprites ──────────────────────────────────────────────────────
+    // texRun[0] = правая нога, texRun[1] = левая нога
+    SDL_Texture* texRun[2]  = {nullptr, nullptr};
+    // texDuck[0] = правая нога, texDuck[1] = левая нога
+    SDL_Texture* texDuck[2] = {nullptr, nullptr};
+    SDL_Texture* texDead    = nullptr;
+    // Размеры каждого спрайта
+    int runW=0,  runH=0;
+    int duckW[2]={0,0}, duckH[2]={0,0};
+    int deadW=0, deadH=0;
+    bool hasSpr=false;
+
+    // Горизонтальный сдвиг спрайта относительно PX (подобрать по виду)
+    static const int SPR_OX = -32;
+
+    static SDL_Texture* loadTex(SDL_Renderer* r, const char* path) {
+        SDL_Surface* s = IMG_Load(path);
+        if (!s) { SDL_Log("Sprite load failed [%s]: %s", path, IMG_GetError()); return nullptr; }
+        SDL_Texture* t = SDL_CreateTextureFromSurface(r, s);
+        SDL_FreeSurface(s);
+        return t;
+    }
+
 public:
     float x=100.f, y;
     float velY=0.f;
-    bool  grounded=true;
-    bool  ducking=false;
-    float legPhase=0.f;
-    WheelSprite wheel;
+    bool  grounded=true, ducking=false, shocked=false;
+    // Анимация: 0 = правая нога (старт), 1 = левая нога; 10 кадров/сек
+    int   animFrame=0;
+    float animTimer=0.f;
 
-    static const int WR = 14;  // wheel radius
-    static const int CH = 64;  // total char height
+    static const int WR = 14;
+    static const int CH = 64;
 
     float groundedY() const { return GROUND_Y-CH; }
 
-    Player(SDL_Renderer* r): y(GROUND_Y-CH) { wheel.build(r,WR,8); }
+    Player(SDL_Renderer* r): y(GROUND_Y-CH) {
+
+        texRun[0]  = loadTex(r, "sprites/Chrome_Bycicle_T-Rex_Right_Run.png");
+        texRun[1]  = loadTex(r, "sprites/Chrome_Bycicle_T-Rex_Left_Run.png");
+        texDuck[0] = loadTex(r, "sprites/Chrome_T-Rex_Right_Duck.png");
+        texDuck[1] = loadTex(r, "sprites/Chrome_T-Rex_Left_Duck.png");
+        texDead    = loadTex(r, "sprites/Dead_Chrome_T-Rex.webp");
+
+        if (texRun[0]) {
+            SDL_QueryTexture(texRun[0], nullptr, nullptr, &runW, &runH);
+            hasSpr = true;
+        }
+        for (int i=0; i<2; ++i)
+            if (texDuck[i])
+                SDL_QueryTexture(texDuck[i], nullptr, nullptr, &duckW[i], &duckH[i]);
+        if (texDead)
+            SDL_QueryTexture(texDead, nullptr, nullptr, &deadW, &deadH);
+    }
+
+    ~Player() {
+        for (auto* t : texRun)  if (t) SDL_DestroyTexture(t);
+        for (auto* t : texDuck) if (t) SDL_DestroyTexture(t);
+        if (texDead) SDL_DestroyTexture(texDead);
+    }
 
     bool jump() {
         if (grounded) { velY=JUMP_VEL; grounded=false; ducking=false; return true; }
         return false;
     }
-    // Release jump key early → lower arc
-    void cutJump() {
-        if (!grounded && velY<0) velY *= 0.42f;
-    }
-
+    void cutJump() { if (!grounded && velY<0) velY *= 0.42f; }
     void setDuck(bool d) { ducking=d; }
 
-    // Returns true the exact frame the player touches ground
     bool update(float dt, float spd) {
         bool wasAir = !grounded;
         if (!grounded) {
@@ -221,125 +220,97 @@ public:
             y    += velY*dt;
             if (y>=groundedY()) { y=groundedY(); velY=0; grounded=true; }
         }
-        if (grounded) legPhase += spd/120.f*dt*6.f;
-        wheel.update(dt, spd);
+
+        // Смена кадра: только на земле и живой, 10 кадров/сек
+        if (grounded && !shocked) {
+            animTimer += dt;
+            if (animTimer >= 0.1f) {
+                animTimer = 0.f;
+                animFrame = 1 - animFrame;  // правая → левая → правая…
+            }
+        }
+
         return wasAir && grounded;
     }
 
     SDL_Rect bounds() const {
-        // Crouched: upper profile removed (ducks under low birds)
         if (ducking && grounded)
             return { (int)x-10, (int)y+22, 44, 16 };
         return { (int)x-8, (int)y+2, 30, 40 };
     }
 
-    // ── Normal dino (Chrome Dino proportions) ─────────────────────
-    void drawNormal(SDL_Renderer* r, int PX, int by) const {
-        setCol(r, DARK);
-
-        // Tail — massive, 4 segments tapering left
-        fillRect(r, PX-26, by+20, 14, 13);
-        fillRect(r, PX-38, by+24, 12,  9);
-        fillRect(r, PX-46, by+28,  8,  5);
-        fillRect(r, PX-52, by+31,  6,  3);
-
-        // Torso — wide and substantial
-        fillRect(r, PX-14, by+16, 30, 20);
-
-        // Neck — thick, short
-        fillRect(r, PX+6,  by+10, 12,  8);
-
-        // Head — large block extending forward
-        fillRect(r, PX+4,  by,    26, 14);
-
-        // Upper snout extension
-        fillRect(r, PX+20, by+9,  14,  6);
-
-        // Lower jaw — long chrome-dino snout
-        fillRect(r, PX+8,  by+13, 28,  6);
-
-        // Eye
-        setCol(r, BG);   fillRect(r, PX+16, by+2, 6, 6);
-        setCol(r, DARK); fillRect(r, PX+17, by+3, 4, 4);
-
-        // Small arm holding handlebar
-        SDL_RenderDrawLine(r, PX+10, by+20, PX+38, by+13);
-    }
-
-    // ── Crouched dino ─────────────────────────────────────────────
-    void drawCrouched(SDL_Renderer* r, int PX, int by) const {
-        setCol(r, DARK);
-
-        // Tail (stays roughly level)
-        fillRect(r, PX-26, by+22, 14, 10);
-        fillRect(r, PX-38, by+26, 12,  6);
-        fillRect(r, PX-46, by+29,  8,  4);
-
-        // Torso (same spot, slightly shorter)
-        fillRect(r, PX-14, by+18, 32, 16);
-
-        // Neck (nearly flat)
-        fillRect(r, PX+8,  by+21, 16,  6);
-
-        // Head — drops down, extends forward
-        fillRect(r, PX+12, by+14, 26, 12);
-
-        // Upper snout (still prominent)
-        fillRect(r, PX+28, by+20, 14,  5);
-
-        // Lower jaw (long, nearly horizontal)
-        fillRect(r, PX+16, by+24, 28,  5);
-
-        // Eye
-        setCol(r, BG);   fillRect(r, PX+22, by+16, 6, 5);
-        setCol(r, DARK); fillRect(r, PX+23, by+17, 4, 3);
-
-        // Arm
-        SDL_RenderDrawLine(r, PX+12, by+22, PX+38, by+13);
-    }
-
     void draw(SDL_Renderer* r) const {
         int PX=(int)x, by=(int)y;
+        bool useDuck = ducking && grounded;
 
-        // Wheel centers
-        int fwx=PX+36, rwx=PX-20;
-        int wy=by+CH-WR;
+        if (hasSpr) {
+            SDL_Texture* tex = nullptr;
+            int sprW=0, sprH=0;
 
-        // Bike frame
-        int bbx=PX+8,  bby=wy+3;
-        int sx =PX-6,  sy =by+26;
-        int hx =PX+26, hy =by+22;
+            if (shocked) {
+                // Смерть: если есть спрайт — он; иначе замёрзший беговой кадр
+                if (texDead) {
+                    tex=texDead; sprW=deadW; sprH=deadH;
+                } else {
+                    tex=texRun[animFrame]; sprW=runW; sprH=runH;
+                }
+            } else if (!useDuck) {
+                // Бег / прыжок
+                tex=texRun[animFrame]; sprW=runW; sprH=runH;
+            } else {
+                // Пригибание — у двух кадров разная высота
+                int fr = animFrame;
+                tex  = texDuck[fr];  sprW=duckW[fr]; sprH=duckH[fr];
+                if (!tex) {          // если одного кадра нет — взять другой
+                    fr = 1-fr;
+                    tex=texDuck[fr]; sprW=duckW[fr]; sprH=duckH[fr];
+                }
+            }
 
-        setCol(r, DARK);
-        SDL_RenderDrawLine(r, rwx, wy,  sx,  sy);   // seat stay
-        SDL_RenderDrawLine(r, rwx, wy,  bbx, bby);  // chain stay
-        SDL_RenderDrawLine(r, bbx, bby, sx,  sy);   // seat tube
-        SDL_RenderDrawLine(r, sx,  sy,  hx,  hy);   // top tube
-        SDL_RenderDrawLine(r, hx,  hy,  bbx, bby);  // down tube
-        SDL_RenderDrawLine(r, hx,  hy,  fwx, wy);   // fork
-        SDL_RenderDrawLine(r, hx,  hy,  PX+38, by+13); // handlebar stem
-        fillRect(r, PX+36, by+11, 5, 3);   // grip
-        fillRect(r, sx-7,  sy-3,  17, 4);  // seat
-
-        wheel.draw(r, fwx, wy);
-        wheel.draw(r, rwx, wy);
-
-        // Pedaling legs — 3-pixel thick, compact
-        setCol(r, DARK);
-        float lp = legPhase;
-        int hx0 = PX-2, hy0 = by+34;   // hip = bottom of torso
-        int f1x = bbx+(int)(6*std::cos(lp)),             f1y = bby+(int)(5*std::sin(lp));
-        int f2x = bbx+(int)(6*std::cos(lp+(float)M_PI)), f2y = bby+(int)(5*std::sin(lp+(float)M_PI));
-        for (int t = -1; t <= 1; ++t) {
-            SDL_RenderDrawLine(r, hx0+t, hy0,    f1x+t, f1y);       // thigh 1
-            SDL_RenderDrawLine(r, f1x+t, f1y,    f1x+3+t, f1y+4);  // shin 1
-            SDL_RenderDrawLine(r, hx0+t, hy0,    f2x+t, f2y);       // thigh 2
-            SDL_RenderDrawLine(r, f2x+t, f2y,    f2x+3+t, f2y+4);  // shin 2
+            if (tex) {
+                // Y: спрайт снизу касается земли (GROUND_Y), формула: by + (CH - sprH)
+                SDL_Rect dst = { PX + SPR_OX, by + (CH - sprH), sprW, sprH };
+                SDL_RenderCopy(r, tex, nullptr, &dst);
+                return;
+            }
         }
 
-        // Dino body (choose pose)
-        if (ducking && grounded) drawCrouched(r, PX, by);
-        else                     drawNormal(r, PX, by);
+        // ── Программный запасной вариант (если спрайты не загрузились) ──
+        int fwx=PX+36, rwx=PX-20, wy=by+CH-WR;
+        int bbx=PX+8, bby=wy+3, sx=PX-6, sy=by+26, hx=PX+26, hy=by+22;
+        setCol(r, DARK);
+        SDL_RenderDrawLine(r, rwx,wy,  sx, sy);
+        SDL_RenderDrawLine(r, rwx,wy,  bbx,bby);
+        SDL_RenderDrawLine(r, bbx,bby, sx, sy);
+        SDL_RenderDrawLine(r, sx, sy,  hx, hy);
+        SDL_RenderDrawLine(r, hx, hy,  bbx,bby);
+        SDL_RenderDrawLine(r, hx, hy,  fwx,wy);
+        SDL_RenderDrawLine(r, hx, hy,  PX+38,by+13);
+        fillRect(r, PX+36,by+11,5,3);
+        fillRect(r, sx-7, sy-3,17,4);
+        float lp=0.f;
+        int hx0=PX-2, hy0=by+34;
+        int f1x=bbx+(int)(6*std::cos(lp)),            f1y=bby+(int)(5*std::sin(lp));
+        int f2x=bbx+(int)(6*std::cos(lp+(float)M_PI)),f2y=bby+(int)(5*std::sin(lp+(float)M_PI));
+        for (int k=-1;k<=1;++k) {
+            SDL_RenderDrawLine(r,hx0+k,hy0, f1x+k,f1y);
+            SDL_RenderDrawLine(r,f1x+k,f1y, f1x+3+k,f1y+4);
+            SDL_RenderDrawLine(r,hx0+k,hy0, f2x+k,f2y);
+            SDL_RenderDrawLine(r,f2x+k,f2y, f2x+3+k,f2y+4);
+        }
+        if (useDuck) {
+            setCol(r,DARK);
+            fillRect(r,PX-14,by+18,32,16); fillRect(r,PX+8,by+21,16,6);
+            fillRect(r,PX+12,by+14,26,12); fillRect(r,PX+28,by+20,14,5);
+            fillRect(r,PX+16,by+24,28,5);
+            setCol(r,BG); fillRect(r,PX+22,by+16,6,5);
+        } else {
+            setCol(r,DARK);
+            fillRect(r,PX-14,by+16,30,20); fillRect(r,PX+6,by+10,12,8);
+            fillRect(r,PX+4, by,   26,14); fillRect(r,PX+20,by+9,14,6);
+            fillRect(r,PX+8, by+13,28, 6);
+            setCol(r,BG); fillRect(r,PX+16,by+2,6,6);
+        }
     }
 };
 
@@ -373,7 +344,7 @@ class Game {
     bool  running=true;
     Uint32 prevTick=0;
     int    displayFPS=60;
-    bool   keyLeft=false, keyRight=false, keyDown=false;
+    bool   keyLeft=false, keyRight=false, keyDown=false, keyJump=false;
 
     std::mt19937 rng{ std::random_device{}() };
 
@@ -395,7 +366,7 @@ class Game {
         delete player; player=new Player(rnd);
         obs.clear(); score=0; speed=INIT_SPEED;
         obstTimer=0; obstInterval=2.f; speedTimer=0; groundScroll=0;
-        keyLeft=false; keyRight=false; keyDown=false;
+        keyLeft=false; keyRight=false; keyDown=false; keyJump=false;
 
         clouds.clear();
         for (int i=0;i<5;++i)
@@ -588,7 +559,9 @@ class Game {
             }
         }
 
-        player->update(dt, speed);
+        bool justLanded = player->update(dt, speed);
+        if (justLanded && keyJump)
+            if (player->jump()) playSound(g_jumpSnd);
 
         obstTimer += dt;
         if (obstTimer>=obstInterval) {
@@ -608,6 +581,7 @@ class Game {
             SDL_Rect ob=o.bounds(), ix;
             if (SDL_IntersectRect(&pb,&ob,&ix)) {
                 if (score>highScore) highScore=score;
+                player->shocked = true;
                 state=State::OVER;
                 playSound(g_dieSnd);
                 return;
@@ -626,7 +600,7 @@ class Game {
                 case SDLK_ESCAPE: running=false; return;
                 case SDLK_SPACE: case SDLK_UP:
                     if      (state==State::INFO) { state=State::PLAY; }
-                    else if (state==State::PLAY) { if (player->jump()) playSound(g_jumpSnd); }
+                    else if (state==State::PLAY) { keyJump=true; if (player->jump()) playSound(g_jumpSnd); }
                     else if (state==State::OVER) { resetRound(); state=State::PLAY; }
                     break;
                 case SDLK_DOWN:  keyDown=true;  break;
@@ -638,7 +612,8 @@ class Game {
             if (e.type==SDL_KEYUP) {
                 switch (e.key.keysym.sym) {
                 case SDLK_SPACE: case SDLK_UP:
-                    if (player) player->cutJump();  // variable jump height
+                    keyJump=false;
+                    if (player) player->cutJump();
                     break;
                 case SDLK_DOWN:  keyDown=false;  break;
                 case SDLK_LEFT:  keyLeft=false;  break;
@@ -657,7 +632,7 @@ public:
         if (rnd)     SDL_DestroyRenderer(rnd);
         if (win)     SDL_DestroyWindow(win);
         if (g_audio) SDL_CloseAudioDevice(g_audio);
-        TTF_Quit(); SDL_Quit();
+        IMG_Quit(); TTF_Quit(); SDL_Quit();
     }
 
     bool init() {
@@ -680,6 +655,7 @@ public:
         fBig=TTF_OpenFont(fp, 36);
         if (!font||!fBig) return false;
 
+        IMG_Init(IMG_INIT_PNG);  // нужно для загрузки PNG-спрайтов
         initAudio();
         resetRound();
         prevTick=SDL_GetTicks();
