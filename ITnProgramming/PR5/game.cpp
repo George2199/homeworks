@@ -7,6 +7,7 @@
 #include <random>
 #include <sstream>
 #include <algorithm>
+#include <memory>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -68,78 +69,202 @@ static bool initAudio() {
 
 
 
-// ─── Obstacle ────────────────────────────────────────────────────────
-// type: 0=small cactus  1=tall cactus  2=double cactus
-//       3=low bird (jump or duck)  4=high bird (run under)
+// ─── Obstacle (абстрактный базовый класс) ────────────────────────────
 class Obstacle {
 public:
-    float x; int type;
-    float birdTimer=0.f; int birdWing=0; // 0=up 1=mid 2=down 3=mid
+    float x;
+    explicit Obstacle(float sx) : x(sx) {}
+    virtual ~Obstacle() = default;
 
-    Obstacle(float sx, int t): x(sx), type(t) {}
+    virtual void     update(float spd, float dt) = 0;
+    virtual bool     offScreen() const = 0;
+    virtual SDL_Rect bounds()    const = 0;
+    virtual void     draw(SDL_Renderer* r) const = 0;
+};
 
-    bool flying()  const { return type>=3; }
-    int  width()   const { if (type==2) return 36; if (type>=3) return 42; return 18; }
-    int  height()  const { if (type==1) return 50; if (type==2) return 50; if (type>=3) return 22; return 35; }
-    int  topY()    const {
-        if (type==3) return GROUND_Y-75;   // low: jump/duck to avoid
-        if (type==4) return GROUND_Y-118;  // high: safe to run under
-        return GROUND_Y-height();
-    }
+// ─── CactusGroup ──────────────────────────────────────────────────────
+// Группа из 1–4 кактусов. Параметры генерируются с соблюдением физики:
+//   высота ≤ 75% высоты прыжка (растёт со скоростью),
+//   суммарная ширина ≤ 90% дальности прыжка,
+//   gap ≥ 1px между кактусами, totalW кактуса ≤ его высоте.
+struct CactusShape {
+    int h;          // высота (px)
+    int tw;         // ширина ствола
+    int leftExt;    // вылет левой ветки (0 = нет)
+    int rightExt;   // вылет правой ветки
+    int leftArmY;   // позиция левой ветки от верхушки
+    int rightArmY;  // позиция правой ветки от верхушки
+    int totalW() const { return leftExt + tw + rightExt; }
+};
 
-    void update(float spd, float dt) {
-        x -= spd*dt;
-        if (flying()) {
-            birdTimer += dt;
-            if (birdTimer>0.13f) { birdTimer=0; birdWing=(birdWing+1)%4; }
+class CactusGroup : public Obstacle {
+    struct Entry { CactusShape shape; int xOff; };
+    std::vector<Entry> cacti;
+    int groupW = 0;
+
+    static CactusShape genShape(std::mt19937& rng, int maxH) {
+        CactusShape s;
+        s.h  = std::uniform_int_distribution<int>(28, maxH)(rng);
+        s.tw = std::uniform_int_distribution<int>(5, 8)(rng);
+        // totalW ≤ h → budget для веток
+        int budget = s.h - s.tw;
+        // Ветки: хотя бы одна, минимум 5px вылет (иначе незаметно)
+        int maxArm = std::min(11, budget / 2);
+        if (maxArm >= 5) {
+            bool wL = std::uniform_int_distribution<int>(0,3)(rng) > 0; // 75%
+            bool wR = std::uniform_int_distribution<int>(0,3)(rng) > 0;
+            if (!wL && !wR) wL = true;  // хотя бы одна
+            s.leftExt  = wL ? std::uniform_int_distribution<int>(5, maxArm)(rng) : 0;
+            int rem    = budget - s.leftExt;
+            int maxR   = std::min(11, rem);
+            s.rightExt = (wR && maxR >= 5) ? std::uniform_int_distribution<int>(5, maxR)(rng) : 0;
+        } else {
+            s.leftExt = s.rightExt = 0;
         }
+        // Позиция ветки: в диапазоне 1/4 … 3/5 высоты
+        int lo = s.h / 4, hi = s.h * 3 / 5;
+        if (lo >= hi) { lo = 4; hi = std::max(5, s.h - 5); }
+        s.leftArmY  = s.leftExt  > 0 ? std::uniform_int_distribution<int>(lo, hi)(rng) : 0;
+        s.rightArmY = s.rightExt > 0 ? std::uniform_int_distribution<int>(lo, hi)(rng) : 0;
+        return s;
     }
-    bool offScreen() const { return x+width()<0; }
 
-    // Hitbox: body only, not wings
-    SDL_Rect bounds() const {
-        return { (int)x+4, topY()+6, width()-8, 14 };
-    }
-
-    void drawOneCactus(SDL_Renderer* r, int lx, int h) const {
+    static void drawShape(SDL_Renderer* r, const CactusShape& s, int lx) {
         setCol(r, DARK);
-        int top=GROUND_Y-h, tw=7, tx=lx+4;
-        fillRect(r, tx,       top+14, tw,   h-14);
-        fillRect(r, tx-2,     top,    tw+4, 15);
-        fillRect(r, tx-8,     top+7,  8,    5);
-        fillRect(r, tx-8,     top+2,  4,    11);
-        fillRect(r, tx+tw,    top+17, 8,    5);
-        fillRect(r, tx+tw+4,  top+11, 4,    11);
+        int top = GROUND_Y - s.h;
+        int tx  = lx + s.leftExt;           // левый край ствола
+        int sw  = std::max(3, s.tw - 2);    // ширина «подстебля» ветки
+
+        // Основной ствол
+        fillRect(r, tx, top, s.tw, s.h);
+        // Верхушка — чуть шире
+        fillRect(r, tx - 1, top, s.tw + 2, std::max(4, s.h / 6));
+
+        // Левая ветка: подстебель + горизонтальная перемычка
+        // Подстебель торчит вверх и немного вниз от точки крепления
+        if (s.leftExt >= 5) {
+            int jy    = top + s.leftArmY;                     // точка крепления к стволу
+            int above = std::max(4, s.leftArmY / 3);          // подстебель поднимается вверх
+            int below = std::max(3, (s.h - s.leftArmY) / 5 + 2); // и немного вниз
+            fillRect(r, lx,           jy - above, sw, above + below);     // подстебель
+            fillRect(r, lx + sw - 1,  jy,          s.leftExt - sw + 2, 4); // горизонт. перемычка
+        }
+
+        // Правая ветка — зеркально
+        if (s.rightExt >= 5) {
+            int jy    = top + s.rightArmY;
+            int above = std::max(4, s.rightArmY / 3);
+            int below = std::max(3, (s.h - s.rightArmY) / 5 + 2);
+            int rx    = tx + s.tw;                             // правый край ствола
+            fillRect(r, rx + s.rightExt - sw,  jy - above, sw, above + below); // подстебель
+            fillRect(r, rx - 1,                 jy,          s.rightExt - sw + 2, 4); // перемычка
+        }
     }
 
-    void draw(SDL_Renderer* r) const {
-        int lx=(int)x;
-        if (type==0) { drawOneCactus(r,lx,35); }
-        else if (type==1) { drawOneCactus(r,lx,50); }
-        else if (type==2) { drawOneCactus(r,lx,50); drawOneCactus(r,lx+18,38); }
-        else {
-            // Pterodactyl — beak faces left, wings animate
-            setCol(r, DARK);
-            int ty=topY(), cx=lx+width()/2;
+public:
+    explicit CactusGroup(float sx) : Obstacle(sx) {}
 
-            // Animated wing offset
-            int wOff = (birdWing==0) ? -7 : (birdWing==2) ? 7 : 0;
+    // Фабричный метод: генерирует группу с учётом physics-ограничений
+    static CactusGroup* generate(std::mt19937& rng, float sx,
+                                  float gameSpeed, float jumpDist) {
+        float jh   = (JUMP_VEL * JUMP_VEL) / (2.f * GRAVITY);
+        int   maxH = (int)(jh * (0.6f + 0.15f * (gameSpeed / INIT_SPEED)));
+        maxH = std::max(30, std::min(90, maxH));
 
-            // Left wing
-            fillRect(r, cx-8,  ty+8+wOff,  14, 5);
-            // Right wing
-            fillRect(r, cx+4,  ty+9+wOff,  14, 4);
+        int maxGrpW = std::max(20, (int)(jumpDist * 0.9f));
 
-            // Body (fixed)
-            fillRect(r, cx-8,  ty+8,  16, 10);
-            // Head
-            fillRect(r, cx-16, ty+6,  10,  8);
-            // Beak
-            fillRect(r, cx-23, ty+8,   7,  3);
-            // Eye
-            setCol(r, BG);
-            fillRect(r, cx-14, ty+7,   2,  2);
+        int count = std::uniform_int_distribution<int>(1, 4)(rng);
+        auto* g   = new CactusGroup(sx);
+        int   cur = 0;
+
+        for (int i = 0; i < count; ++i) {
+            CactusShape s   = genShape(rng, maxH);
+            int gap  = (i == 0) ? 0 : std::uniform_int_distribution<int>(1, 4)(rng);
+            int xOff = cur + gap;
+            if (xOff + s.totalW() > maxGrpW && i > 0) break;
+            g->cacti.push_back({s, xOff});
+            cur = xOff + s.totalW();
         }
+        g->groupW = cur;
+        return g;
+    }
+
+    void update(float spd, float dt) override { x -= spd * dt; }
+
+    bool offScreen() const override { return x + groupW < 0; }
+
+    SDL_Rect bounds() const override {
+        if (cacti.empty()) return {(int)x, GROUND_Y - 30, 10, 30};
+        int minTx = cacti[0].xOff + cacti[0].shape.leftExt;
+        int maxRx = 0, maxH = 0;
+        for (const auto& e : cacti) {
+            int tx = e.xOff + e.shape.leftExt;
+            minTx = std::min(minTx, tx);
+            maxRx = std::max(maxRx, tx + e.shape.tw);
+            maxH  = std::max(maxH, e.shape.h);
+        }
+        return { (int)x + minTx + 1, GROUND_Y - maxH + 2, maxRx - minTx - 2, maxH - 2 };
+    }
+
+    void draw(SDL_Renderer* r) const override {
+        for (const auto& e : cacti)
+            drawShape(r, e.shape, (int)x + e.xOff);
+    }
+};
+
+// ─── Pterodactyl ──────────────────────────────────────────────────────
+// Летящее препятствие: высота и скорость — непрерывные случайные значения.
+//   altitude  — topY (чем меньше, тем выше на экране)
+//   ownSpeed  — зафиксирована при спавне (40–72% от скорости игры)
+class Pterodactyl : public Obstacle {
+    float altitude;       // верхний Y птеродактиля
+    float ownSpeed;       // горизонтальная скорость (px/s)
+    float wingTimer = 0.f;
+    int   wingPhase = 0;  // 0=вверх 1=нейтраль 2=вниз 3=нейтраль
+
+    static const int W = 42;
+    static const int H = 22;
+
+public:
+    Pterodactyl(float sx, float gameSpeed, std::mt19937& rng)
+        : Obstacle(sx)
+    {
+        altitude = float(std::uniform_int_distribution<int>(
+            GROUND_Y - 125, GROUND_Y - 48)(rng));
+        // Птеродактиль летит примерно со скоростью игры — не медленнее пола
+        float f  = std::uniform_real_distribution<float>(1.0f, 1.28f)(rng);
+        ownSpeed = f * gameSpeed;
+    }
+
+    void update(float /*spd*/, float dt) override {
+        x -= ownSpeed * dt;
+        wingTimer += dt;
+        if (wingTimer > 0.13f) { wingTimer = 0.f; wingPhase = (wingPhase + 1) % 4; }
+    }
+
+    bool offScreen() const override { return x + W < 0; }
+
+    // Хитбокс — только тело, без крыльев
+    SDL_Rect bounds() const override {
+        return { (int)x + 5, (int)altitude + 6, W - 10, 12 };
+    }
+
+    void draw(SDL_Renderer* r) const override {
+        setCol(r, DARK);
+        int ty = (int)altitude, cx = (int)x + W / 2;
+        int wOff = (wingPhase == 0) ? -7 : (wingPhase == 2) ? 7 : 0;
+        // Крылья
+        fillRect(r, cx - 8,  ty + 8 + wOff, 14, 5);
+        fillRect(r, cx + 4,  ty + 9 + wOff, 14, 4);
+        // Тело
+        fillRect(r, cx - 8,  ty + 8, 16, 10);
+        // Голова
+        fillRect(r, cx - 16, ty + 6, 10,  8);
+        // Клюв
+        fillRect(r, cx - 23, ty + 8,  7,  3);
+        // Глаз
+        setCol(r, BG);
+        fillRect(r, cx - 14, ty + 7,  2,  2);
     }
 };
 
@@ -153,7 +278,7 @@ class Player {
     SDL_Texture* texDead    = nullptr;
     // Размеры каждого спрайта
     int runW=0,  runH=0;
-    int duckW[2]={0,0}, duckH[2]={0,0};
+    int duckW=0, duckH=0;
     int deadW=0, deadH=0;
     bool hasSpr=false;
 
@@ -193,9 +318,8 @@ public:
             SDL_QueryTexture(texRun[0], nullptr, nullptr, &runW, &runH);
             hasSpr = true;
         }
-        for (int i=0; i<2; ++i)
-            if (texDuck[i])
-                SDL_QueryTexture(texDuck[i], nullptr, nullptr, &duckW[i], &duckH[i]);
+        if (texDuck[0])
+            SDL_QueryTexture(texDuck[0], nullptr, nullptr, &duckW, &duckH);
         if (texDead)
             SDL_QueryTexture(texDead, nullptr, nullptr, &deadW, &deadH);
     }
@@ -234,9 +358,12 @@ public:
     }
 
     SDL_Rect bounds() const {
+        // Хитбоксы подогнаны под размеры спрайтов (с полями ~8px с боков)
+        // Спрайт бега (80×93) нарисован от (x-32, y-29)
+        // Спрайт приседания (110×75) нарисован от (x-32, y-11)
         if (ducking && grounded)
-            return { (int)x-10, (int)y+22, 44, 16 };
-        return { (int)x-8, (int)y+2, 30, 40 };
+            return { (int)x - 24, (int)y - 8, 94, 72 };
+        return { (int)x - 24, (int)y - 24, 64, 88 };
     }
 
     void draw(SDL_Renderer* r) const {
@@ -258,13 +385,10 @@ public:
                 // Бег / прыжок
                 tex=texRun[animFrame]; sprW=runW; sprH=runH;
             } else {
-                // Пригибание — у двух кадров разная высота
-                int fr = animFrame;
-                tex  = texDuck[fr];  sprW=duckW[fr]; sprH=duckH[fr];
-                if (!tex) {          // если одного кадра нет — взять другой
-                    fr = 1-fr;
-                    tex=texDuck[fr]; sprW=duckW[fr]; sprH=duckH[fr];
-                }
+                // Пригибание — оба кадра одинакового размера
+                tex = texDuck[animFrame];
+                if (!tex) tex = texDuck[1 - animFrame];  // запасной кадр
+                sprW = duckW; sprH = duckH;
             }
 
             if (tex) {
@@ -325,7 +449,7 @@ class Game {
 
     State   state = State::INFO;
     Player* player = nullptr;
-    std::vector<Obstacle> obs;
+    std::vector<std::unique_ptr<Obstacle>> obs;
 
     struct Cloud { float x, y; int w; };
     std::vector<Cloud> clouds;
@@ -401,15 +525,17 @@ class Game {
 
     // ── Obstacle spawning ───────────────────────────────────────────
     void spawnObstacle() {
-        int roll=std::uniform_int_distribution<int>(0,9)(rng);
-        int type = (roll<4)?0 : (roll<6)?1 : (roll<7)?2 : (roll<9)?3 : 4;
-        obs.emplace_back((float)WIN_W+10, type);
+        float airTime  = 2.f * (-JUMP_VEL) / GRAVITY;   // время полёта при прыжке
+        float jumpDist = speed * airTime;                 // дальность прыжка (px)
 
-        // 35% chance: second obstacle close behind
-        if (std::uniform_int_distribution<int>(0,9)(rng)<4) {
-            int gap=std::uniform_int_distribution<int>(55,130)(rng);
-            obs.emplace_back((float)WIN_W+10+gap,
-                             std::uniform_int_distribution<int>(0,1)(rng));
+        if (std::uniform_int_distribution<int>(0, 9)(rng) < 2) {
+            // 20% вероятность — птеродактиль
+            obs.push_back(std::make_unique<Pterodactyl>(
+                (float)WIN_W + 10, speed, rng));
+        } else {
+            // 70% — группа кактусов (1–4 шт.)
+            obs.emplace_back(CactusGroup::generate(
+                rng, (float)WIN_W + 10, speed, jumpDist));
         }
     }
 
@@ -435,7 +561,7 @@ class Game {
 
         // Box 1 — author
         box(74, 38);
-        drawText("Автор: Kayle  |  ИТИП  |  Вариант 10  |  C++ / SDL2",
+        drawText("Автор: Денисов Георгий  |  ИТИП  |  Вариант 10  |  C++ / SDL2",
                  font, DARK, 0, 84, true);
 
         // Box 2 — goal
@@ -511,7 +637,7 @@ class Game {
             }
         }
 
-        for (const auto& o : obs) o.draw(rnd);
+        for (const auto& o : obs) o->draw(rnd);
         player->draw(rnd);
 
         // HUD
@@ -571,14 +697,15 @@ class Game {
             spawnObstacle();
         }
 
-        for (auto& o : obs) o.update(speed, dt);
-        obs.erase(std::remove_if(obs.begin(),obs.end(),
-            [](const Obstacle& o){return o.offScreen();}), obs.end());
+        for (auto& o : obs) o->update(speed, dt);
+        obs.erase(std::remove_if(obs.begin(), obs.end(),
+            [](const std::unique_ptr<Obstacle>& o){ return o->offScreen(); }),
+            obs.end());
 
         // Collision
         SDL_Rect pb=player->bounds();
         for (const auto& o : obs) {
-            SDL_Rect ob=o.bounds(), ix;
+            SDL_Rect ob=o->bounds(), ix;
             if (SDL_IntersectRect(&pb,&ob,&ix)) {
                 if (score>highScore) highScore=score;
                 player->shocked = true;

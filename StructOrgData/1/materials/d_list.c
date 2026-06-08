@@ -1,4 +1,4 @@
-/*двусвязный линейный список*/
+/*РґРІСѓСЃРІСЏР·РЅС‹Р№ Р»РёРЅРµР№РЅС‹Р№ СЃРїРёСЃРѕРє*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,37 +21,37 @@ void makenull (struct List *list)
      list->head = list->tail = NULL;
 }
 
-struct List add_head (struct List list, DataType x) /*добавление в начало*/
+struct List add_head (struct List list, DataType x) /*РґРѕР±Р°РІР»РµРЅРёРµ РІ РЅР°С‡Р°Р»Рѕ*/
 {
        struct element * temp;
        temp = (struct element *) malloc (sizeof (struct element));
        temp->data = x;
        temp->next = list.head;
        temp->prev = NULL;
-       if (list.head) /*если добавляем в непустой список*/
+       if (list.head) /*РµСЃР»Рё РґРѕР±Р°РІР»СЏРµРј РІ РЅРµРїСѓСЃС‚РѕР№ СЃРїРёСЃРѕРє*/
           list.head->prev = temp;
-       else /*если добавляемый элемент единственный в списке*/
+       else /*РµСЃР»Рё РґРѕР±Р°РІР»СЏРµРјС‹Р№ СЌР»РµРјРµРЅС‚ РµРґРёРЅСЃС‚РІРµРЅРЅС‹Р№ РІ СЃРїРёСЃРєРµ*/
           list.tail = temp;
        list.head = temp;
        return list;
 }
 
-struct List add_tail (struct List list, DataType x) /*добавление в конец*/
+struct List add_tail (struct List list, DataType x) /*РґРѕР±Р°РІР»РµРЅРёРµ РІ РєРѕРЅРµС†*/
 {
        struct element * temp;
        temp = (struct element *) malloc (sizeof (struct element));
        temp->data = x;
        temp->next = NULL;
        temp->prev = list.tail;
-       if (list.tail) /*если добавляем в непустой список*/
+       if (list.tail) /*РµСЃР»Рё РґРѕР±Р°РІР»СЏРµРј РІ РЅРµРїСѓСЃС‚РѕР№ СЃРїРёСЃРѕРє*/
           list.tail->next = temp;
-       else /*если добавляемый элемент единственный в списке*/
+       else /*РµСЃР»Рё РґРѕР±Р°РІР»СЏРµРјС‹Р№ СЌР»РµРјРµРЅС‚ РµРґРёРЅСЃС‚РІРµРЅРЅС‹Р№ РІ СЃРїРёСЃРєРµ*/
           list.head = temp;
        list.tail = temp;
        return list;
 }
 
-void insert (struct element * cur, DataType x) /*вставка после текущего (не последнего!)*/
+void insert (struct element * cur, DataType x) /*РІСЃС‚Р°РІРєР° РїРѕСЃР»Рµ С‚РµРєСѓС‰РµРіРѕ (РЅРµ РїРѕСЃР»РµРґРЅРµРіРѕ!)*/
 {
        struct element * temp;
        temp = (struct element *) malloc (sizeof (struct element));
@@ -59,74 +59,74 @@ void insert (struct element * cur, DataType x) /*вставка после текущего (не посл
        temp->next = cur->next;
        temp->prev = cur;
        cur->next = temp;
-       temp->next->prev = temp; /*указателю prev следующего элемента присваиваем адрес добавляемого*/
+       temp->next->prev = temp; /*РѕР±РЅРѕРІР»СЏРµРј prev СЃР»РµРґСѓСЋС‰РµРіРѕ СЌР»РµРјРµРЅС‚Р° РґРѕР±Р°РІР»РµРЅРЅС‹Рј РїРѕСЃР»Рµ РІСЃС‚Р°РІР»РµРЅРЅРѕРіРѕ*/
 }
 
-void del_list (struct List list) /*удаление списка*/
+void del_list (struct List list) /*СѓРґР°Р»РµРЅРёРµ СЃРїРёСЃРєР°*/
 {
      struct element * temp;
-     while (list.head) /*пока в списке есть элементы*/
+     while (list.head) /*РµСЃР»Рё РІ СЃРїРёСЃРєРµ РµСЃС‚СЊ СЌР»РµРјРµРЅС‚С‹*/
      {
            temp = list.head;
-           list.head = list.head->next; /*переставляем указатель на следующий элемент*/
-           free (temp); /*первый удаляем*/
+           list.head = list.head->next; /*РїРµСЂРµСЃС‚Р°РІР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° СЃР»РµРґСѓСЋС‰РёР№ СЌР»РµРјРµРЅС‚*/
+           free (temp); /*РїРµСЂРІС‹Р№ СѓРґР°Р»СЏРµРј*/
      }
 }
 
-struct List del_head (struct List list) /*удаление первого элемента*/
+struct List del_head (struct List list) /*СѓРґР°Р»РµРЅРёРµ РїРµСЂРІРѕРіРѕ СЌР»РµРјРµРЅС‚Р°*/
 {
      struct element * temp;
-     if (list.head) /*если в списке есть элементы*/
+     if (list.head) /*РµСЃР»Рё РІ СЃРїРёСЃРєРµ РµСЃС‚СЊ СЌР»РµРјРµРЅС‚С‹*/
      {
            temp = list.head;
-           list.head = list.head->next; /*переставляем указатель на следующий элемент*/
-           if (list.head == NULL) /*если удаляемый элемент был единственным*/
+           list.head = list.head->next; /*РїРµСЂРµСЃС‚Р°РІР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° СЃР»РµРґСѓСЋС‰РёР№ СЌР»РµРјРµРЅС‚*/
+           if (list.head == NULL) /*РµСЃР»Рё СѓРґР°Р»С‘РЅРЅС‹Р№ СЌР»РµРјРµРЅС‚ Р±С‹Р» РµРґРёРЅСЃС‚РІРµРЅРЅС‹Рј*/
                list.tail = NULL;
            else
-               list.head->prev = NULL; /*обнуляем указатель на удаляемый элемент*/
-           free (temp); /*первый удаляем*/
+               list.head->prev = NULL; /*РѕР±РЅСѓР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° СѓРґР°Р»С‘РЅРЅС‹Р№ СЌР»РµРјРµРЅС‚*/
+           free (temp); /*РїРµСЂРІС‹Р№ СѓРґР°Р»СЏРµРј*/
      }
      return list;
 }
 
-struct List del_tail (struct List list) /*удаление последнего элемента*/
+struct List del_tail (struct List list) /*СѓРґР°Р»РµРЅРёРµ РїРѕСЃР»РµРґРЅРµРіРѕ СЌР»РµРјРµРЅС‚Р°*/
 {
      struct element * temp;
-     if (list.tail) /*если в списке есть элементы*/
+     if (list.tail) /*РµСЃР»Рё РІ СЃРїРёСЃРєРµ РµСЃС‚СЊ СЌР»РµРјРµРЅС‚С‹*/
      {
            temp = list.tail;
-           list.tail = list.tail->prev; /*переставляем указатель на предыдущий элемент*/
-           if (list.tail == NULL) /*если удаляемый элемент был единственным*/
+           list.tail = list.tail->prev; /*РїРµСЂРµСЃС‚Р°РІР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° РїСЂРµРґС‹РґСѓС‰РёР№ СЌР»РµРјРµРЅС‚*/
+           if (list.tail == NULL) /*РµСЃР»Рё СѓРґР°Р»С‘РЅРЅС‹Р№ СЌР»РµРјРµРЅС‚ Р±С‹Р» РµРґРёРЅСЃС‚РІРµРЅРЅС‹Рј*/
                 list.head = NULL;
            else
-                list.tail->next = NULL; /*обнуляем указатель на удаляемый элемент*/
-           free (temp); /*последний удаляем*/
+                list.tail->next = NULL; /*РѕР±РЅСѓР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° СѓРґР°Р»С‘РЅРЅС‹Р№ СЌР»РµРјРµРЅС‚*/
+           free (temp); /*РїРѕСЃР»РµРґРЅРёР№ СѓРґР°Р»СЏРµРј*/
      }
      return list;
 }
 
-void del_element (struct element * cur) /*удаление текущего (важно(!) не первого и не последнего)*/
+void del_element (struct element * cur) /*СѓРґР°Р»РµРЅРёРµ СЌР»РµРјРµРЅС‚Р° (Р»СЋР±РѕР№(!) РЅРµ РїРµСЂРІРѕРіРѕ Рё РЅРµ РїРѕСЃР»РµРґРЅРµРіРѕ)*/
 {
-       cur->next->prev = cur->prev; /*указателю prev следующего элемента присваиваем адрес предшествующего удаляемому*/
-       cur->prev->next = cur->next; /*указателю next предыдущего элемента присваиваем адрес следующего за удаляемым*/
+       cur->next->prev = cur->prev; /*РѕР±РЅРѕРІР»СЏРµРј prev СЃР»РµРґСѓСЋС‰РµРіРѕ СЌР»РµРјРµРЅС‚Р° СѓРєР°Р·Р°С‚РµР»РµРј С‡РµСЂРµР· РїСЂРµРґС€РµСЃС‚РІСѓСЋС‰РµРіРѕ СѓРґР°Р»СЏРµРјРѕРјСѓ*/
+       cur->prev->next = cur->next; /*РѕР±РЅРѕРІР»СЏРµРј next РїСЂРµРґС‹РґСѓС‰РµРіРѕ СЌР»РµРјРµРЅС‚Р° СѓРєР°Р·Р°С‚РµР»РµРј С‡РµСЂРµР· СЃР»РµРґСѓСЋС‰РёР№ Р·Р° РЅРµ РїРѕСЃР»РµРґРЅРёРј*/
        free (cur);
 }
 
-void print_list (struct List list) /*печать списка*/
+void print_list (struct List list) /*РїРµС‡Р°С‚СЊ СЃРїРёСЃРєР°*/
 {
-     while (list.head) /*пока в списке есть элементы*/
+     while (list.head) /*РµСЃР»Рё РІ СЃРїРёСЃРєРµ РµСЃС‚СЊ СЌР»РµРјРµРЅС‚С‹*/
      {
            printf ("%d ", list.head->data);
-           list.head = list.head->next; /*переставляем указатель на следующий элемент*/
+           list.head = list.head->next; /*РїРµСЂРµСЃС‚Р°РІР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° СЃР»РµРґСѓСЋС‰РёР№ СЌР»РµРјРµРЅС‚*/
      }
 }
 
-void print_list_back (struct List list) /*печать списка в обратном порядке*/
+void print_list_back (struct List list) /*РїРµС‡Р°С‚СЊ СЃРїРёСЃРєР° РІ РѕР±СЂР°С‚РЅРѕРј РїРѕСЂСЏРґРєРµ*/
 {
-     while (list.tail) /*пока в списке есть элементы*/
+     while (list.tail) /*РµСЃР»Рё РІ СЃРїРёСЃРєРµ РµСЃС‚СЊ СЌР»РµРјРµРЅС‚С‹*/
      {
            printf ("%d ", list.tail->data);
-           list.tail = list.tail->prev; /*переставляем указатель на следующий элемент*/
+           list.tail = list.tail->prev; /*РїРµСЂРµСЃС‚Р°РІР»СЏРµРј СѓРєР°Р·Р°С‚РµР»СЊ РЅР° СЃР»РµРґСѓСЋС‰РёР№ СЌР»РµРјРµРЅС‚*/
      }
 }
 
@@ -146,16 +146,16 @@ int main(int argc, char *argv[])
   printf ("\n");
   print_list_back (list);
   printf ("\n");
-  insert (list.head->next, 1000); /*вставка числа 1000 после второго элемента списка*/
+  insert (list.head->next, 1000); /*РІСЃС‚Р°РІРєР° С‡РёСЃР»Р° 1000 РїРѕСЃР»Рµ РІС‚РѕСЂРѕРіРѕ СЌР»РµРјРµРЅС‚Р° СЃРїРёСЃРєР°*/
   print_list (list);
   printf ("\n");
-  list = del_head(list); /*удаление первого элемента*/
+  list = del_head(list); /*СѓРґР°Р»РµРЅРёРµ РїРµСЂРІРѕРіРѕ СЌР»РµРјРµРЅС‚Р°*/
   print_list (list);
   printf ("\n");
-  list = del_tail (list); /*удаление последнего элемента*/
+  list = del_tail (list); /*СѓРґР°Р»РµРЅРёРµ РїРѕСЃР»РµРґРЅРµРіРѕ СЌР»РµРјРµРЅС‚Р°*/
   print_list (list);
   printf ("\n");
-  del_element (list.tail->prev); /*удаление предпоследнего элемента*/
+  del_element (list.tail->prev); /*СѓРґР°Р»РµРЅРёРµ РїСЂРµРґРїРѕСЃР»РµРґРЅРµРіРѕ СЌР»РµРјРµРЅС‚Р°*/
   print_list (list);
   printf ("\n");
   del_list (list);
