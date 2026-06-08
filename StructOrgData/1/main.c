@@ -30,16 +30,20 @@
 
 #ifdef _WIN32
 #  include <windows.h>
-#  define CLRSCR()    system("cls")
-#  define ICMP(a, b)  _stricmp((a), (b))
+#  include <direct.h>
+#  define CLRSCR()      system("cls")
+#  define ICMP(a, b)    _stricmp((a), (b))
+#  define MKDIR_DATA()  _mkdir("data")
 #else
 #  include <strings.h>
-#  define CLRSCR()    system("clear")
-#  define ICMP(a, b)  strcasecmp((a), (b))
+#  include <sys/stat.h>
+#  define CLRSCR()      system("clear")
+#  define ICMP(a, b)    strcasecmp((a), (b))
+#  define MKDIR_DATA()  mkdir("data", 0755)
 #endif
 
 #define PAGE_SIZE    5
-#define DEFAULT_FILE "library.dat"
+#define DEFAULT_FILE "data/library.dat"
 
 /* Текущий год (не константа — вычисляется в runtime) */
 static int cur_year(void) {
@@ -249,6 +253,30 @@ static void pause_enter(void) {
     int c; while ((c = getchar()) != '\n' && c != EOF);
 }
 
+/* Нормализует имя файла, введённое с клавиатуры (без явного пути):
+ *   1) нет расширения → дописывает ".dat"  ("mylib"   → "mylib.dat")
+ *   2) нет слеша     → вставляет "data/"   ("mylib.dat" → "data/mylib.dat")
+ * Если в имени уже есть '/' или '\' — не трогает совсем. */
+static void normalize_fname(char *fname, size_t maxlen) {
+    if (strchr(fname, '/') != NULL || strchr(fname, '\\') != NULL)
+        return;                        /* явный путь — оставляем как есть */
+    if (strchr(fname, '.') == NULL) {  /* нет точки — дописываем .dat */
+        size_t len = strlen(fname);
+        if (len + 4 < maxlen)
+            strcat(fname, ".dat");
+    }
+    size_t len = strlen(fname);        /* вставляем "data/" в начало */
+    if (len + 5 < maxlen) {
+        memmove(fname + 5, fname, len + 1);
+        memcpy(fname, "data/", 5);
+    }
+}
+
+/* Создаём папку data/ если её нет (ошибка EEXIST — норма, игнорируем). */
+static void ensure_data_dir(void) {
+    MKDIR_DATA();
+}
+
 static const char *kind_name(BookKind k) {
     switch (k) {
         case SCIENTIFIC: return "Науч.";
@@ -405,13 +433,13 @@ static void view_backward(DList *L) {
  *                      КОМПАРАТОРЫ
  * ═══════════════════════════════════════════════════════════ */
 
-static int cmp_author   (const Book *a, const Book *b) { return strcmp(a->author,    b->author);    }
-static int cmp_title    (const Book *a, const Book *b) { return strcmp(a->title,     b->title);     }
-static int cmp_year_asc (const Book *a, const Book *b) { return a->year    - b->year;               }
-static int cmp_year_desc(const Book *a, const Book *b) { return b->year    - a->year;               }
-static int cmp_publisher(const Book *a, const Book *b) { return strcmp(a->publisher, b->publisher); }
-static int cmp_topic    (const Book *a, const Book *b) { return strcmp(a->topic,     b->topic);     }
-static int cmp_copies   (const Book *a, const Book *b) { return a->copies  - b->copies;             }
+static int cmp_author   (const Book *a, const Book *b) { return ICMP(a->author,    b->author);    }
+static int cmp_title    (const Book *a, const Book *b) { return ICMP(a->title,     b->title);     }
+static int cmp_year_asc (const Book *a, const Book *b) { return a->year    - b->year;              }
+static int cmp_year_desc(const Book *a, const Book *b) { return b->year    - a->year;              }
+static int cmp_publisher(const Book *a, const Book *b) { return ICMP(a->publisher, b->publisher); }
+static int cmp_topic    (const Book *a, const Book *b) { return ICMP(a->topic,     b->topic);     }
+static int cmp_copies   (const Book *a, const Book *b) { return a->copies  - b->copies;            }
 
 /* Строит отсортированный вспомогательный список и показывает постранично */
 static void show_sorted(DList *L, int (*cmp)(const Book *, const Book *),
@@ -429,11 +457,9 @@ static void show_sorted(DList *L, int (*cmp)(const Book *, const Book *),
  * (для dlist_remove — предикат передаётся параметром)
  * ═══════════════════════════════════════════════════════════ */
 
-static int pred_author(const Book *b, const void *arg) {
-    return ICMP(b->author, (const char *)arg) == 0;
-}
-static int pred_title(const Book *b, const void *arg) {
-    return ICMP(b->title,  (const char *)arg) == 0;
+/* Совпадение по адресу данных — для удаления записи, выбранной из списка */
+static int pred_ptr(const Book *b, const void *arg) {
+    return b == (const Book *)arg;
 }
 
 
@@ -513,6 +539,66 @@ static Book *input_book(void) {
 
 
 /* ═══════════════════════════════════════════════════════════
+ *  ВЫБОР ИЗ УНИКАЛЬНЫХ ЗНАЧЕНИЙ ПОЛЯ
+ *  get  — функция, возвращающая нужное поле книги (publisher / topic / …)
+ *  Показывает пронумерованный список уникальных значений (отсортирован),
+ *  пункт 0 — ввести вручную. Возвращает 1 при выборе, 0 при отмене.
+ * ═══════════════════════════════════════════════════════════ */
+
+static const char *book_publisher(const Book *b) { return b->publisher; }
+static const char *book_topic    (const Book *b) { return b->topic;     }
+
+static int pick_unique(DList *L,
+        const char *(*get)(const Book *),
+        const char *label, char *out, size_t outlen)
+{
+    char vals[64][80];
+    int  n = 0;
+
+    /* собираем уникальные значения */
+    for (DNode *c = L->head; c && n < 64; c = c->next) {
+        const char *v = get(c->data);
+        int dup = 0;
+        for (int i = 0; i < n; i++)
+            if (ICMP(vals[i], v) == 0) { dup = 1; break; }
+        if (!dup) {
+            strncpy(vals[n], v, sizeof vals[n] - 1);
+            vals[n][sizeof vals[n] - 1] = '\0';
+            n++;
+        }
+    }
+    if (!n) { puts("Список пуст."); return 0; }
+
+    /* сортируем (список маленький — пузырёк достаточен) */
+    for (int i = 0; i < n-1; i++)
+        for (int j = i+1; j < n; j++)
+            if (ICMP(vals[i], vals[j]) > 0) {
+                char tmp[80];
+                strncpy(tmp,    vals[i], sizeof tmp    - 1);
+                strncpy(vals[i], vals[j], sizeof vals[i] - 1);
+                strncpy(vals[j], tmp,    sizeof vals[j] - 1);
+            }
+
+    printf("\n%s:\n", label);
+    for (int i = 0; i < n; i++)
+        printf("  %2d. %s\n", i+1, vals[i]);
+    puts("   0. Ввести вручную");
+
+    int ch = read_int("Выбор");
+    if (ch >= 1 && ch <= n) {
+        strncpy(out, vals[ch-1], outlen - 1);
+        out[outlen - 1] = '\0';
+        return 1;
+    }
+    if (ch == 0) {
+        read_str(label, out, (int)outlen);
+        return out[0] != '\0';
+    }
+    return 0;
+}
+
+
+/* ═══════════════════════════════════════════════════════════
  *               ЗАПРОСЫ ВАРИАНТА 10
  * ═══════════════════════════════════════════════════════════ */
 
@@ -521,7 +607,8 @@ static void query_publisher_5years(DList *L) {
     CLRSCR();
     puts("=== Запрос 1: книги издательства за последние 5 лет ===");
     char pub[50];
-    read_str("Издательство", pub, sizeof pub);
+    if (!pick_unique(L, book_publisher, "Издательство", pub, sizeof pub))
+        return;
 
     int yr = cur_year();
     AuxList A; aux_init(&A);
@@ -548,7 +635,8 @@ static void query_topic_share(DList *L) {
     CLRSCR();
     puts("=== Запрос 2: доля книг по тематике ===");
     char topic[40];
-    read_str("Тематика", topic, sizeof topic);
+    if (!pick_unique(L, book_topic, "Тематика", topic, sizeof topic))
+        return;
 
     long total = 0, match = 0;
     AuxList A; aux_init(&A);
@@ -561,20 +649,153 @@ static void query_topic_share(DList *L) {
         }
     }
 
-    printf("\nТематика    : «%s»\n", topic);
     if (!total) {
         puts("Библиотека пуста.");
         pause_enter();
+        aux_free(&A);
+        return;
+    }
+
+    /* Заголовок содержит тему и долю — статистика видна прямо в шапке
+       пагинатора и не стирается его CLRSCR().                          */
+    char title[160];
+    snprintf(title, sizeof title,
+             "Книги по теме «%s»: %ld из %ld экз. (%.1f%%)",
+             topic, match, total, 100.0 * match / total);
+
+    if (A.count) {
+        paged_view(&A, title);
     } else {
-        printf("Найдено     : %zu назв.,  %ld экз.\n", A.count, match);
-        printf("Всего в б-ке: %ld экз.\n", total);
-        printf("Доля        : %.1f%%\n\n", 100.0 * match / total);
-        if (A.count)
-            paged_view(&A, "Книги по теме");
-        else
-            pause_enter();
+        CLRSCR();
+        printf("=== %s ===\n", title);
+        puts("Книг с такой тематикой не найдено.");
+        pause_enter();
     }
     aux_free(&A);
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+ *              ДЕМОНСТРАЦИОННЫЕ ДАННЫЕ  (20 книг)
+ *
+ * Подобраны так, чтобы показать оба запроса варианта 10:
+ *   Запрос 1 — издательство «Питер», 2021–2026:
+ *             Страуструп, Кормен, Шилдт, Лутц, Прата,
+ *             Таненбаум, Ван Россум  (7 книг)
+ *   Запрос 2 — тематика «Программирование»:
+ *             Страуструп(150) + Шилдт(180) + Лутц(120) +
+ *             Прата(95) + Мартин(160) + Фаулер(70) +
+ *             Ван Россум(50)  = 825 экз. из 3440 итого ≈ 24%
+ * ═══════════════════════════════════════════════════════════ */
+
+static void add_demo_book(DList *L,
+        const char *author, const char *title,
+        const char *publisher, int year,
+        const char *topic, int copies,
+        BookKind kind, union BookExtra extra)
+{
+    Book *b = calloc(1, sizeof *b);
+    if (!b) return;
+    strncpy(b->author,    author,    sizeof b->author    - 1);
+    strncpy(b->title,     title,     sizeof b->title     - 1);
+    strncpy(b->publisher, publisher, sizeof b->publisher - 1);
+    b->year   = year;
+    strncpy(b->topic, topic, sizeof b->topic - 1);
+    b->copies = copies;
+    b->kind   = kind;
+    b->extra  = extra;
+    dlist_append(L, b);
+}
+
+static void load_demo_data(DList *L) {
+    union BookExtra e;
+
+    /* ── Учебники ─────────────────────────────────────────── */
+#define TXT(disc, lvl) \
+    (memset(&e, 0, sizeof e), \
+     strncpy(e.txt.discipline, (disc), sizeof e.txt.discipline - 1), \
+     e.txt.level = (lvl), e)
+
+    add_demo_book(L, "Страуструп Б.",
+        "Язык программирования C++",
+        "Питер",         2023, "Программирование", 150, TEXTBOOK,  TXT("Информатика",      1));
+    add_demo_book(L, "Кормен Т.",
+        "Алгоритмы: построение и анализ",
+        "Питер",         2022, "Алгоритмы",        200, TEXTBOOK,  TXT("Дискр. математика", 1));
+    add_demo_book(L, "Шилдт Г.",
+        "Java. Полное руководство",
+        "Питер",         2021, "Программирование", 180, TEXTBOOK,  TXT("ООП",               1));
+    add_demo_book(L, "Лутц М.",
+        "Программирование на Python",
+        "Питер",         2024, "Программирование", 120, TEXTBOOK,  TXT("Программирование",  1));
+    add_demo_book(L, "Прата С.",
+        "Язык программирования C",
+        "Питер",         2025, "Программирование",  95, TEXTBOOK,  TXT("Информатика",       1));
+    add_demo_book(L, "Таненбаум Э.",
+        "Современные операционные системы",
+        "Питер",         2021, "Системное ПО",     130, TEXTBOOK,  TXT("Операц. системы",   1));
+    add_demo_book(L, "Дейт К.",
+        "Введение в базы данных",
+        "БХВ-Петербург", 2023, "Базы данных",      110, TEXTBOOK,  TXT("Базы данных",       1));
+    add_demo_book(L, "Мартин Р.",
+        "Чистый код",
+        "БХВ-Петербург", 2024, "Программирование", 160, TEXTBOOK,  TXT("Разработка ПО",     1));
+    add_demo_book(L, "Ван Россум Г.",
+        "Документация Python 3",
+        "Питер",         2025, "Программирование",  50, TEXTBOOK,  TXT("Python",             1));
+#undef TXT
+
+    /* ── Научные ──────────────────────────────────────────── */
+#define SCI(u, src) \
+    (memset(&e, 0, sizeof e), \
+     strncpy(e.sci.udk, (u), sizeof e.sci.udk - 1), \
+     e.sci.sources = (src), e)
+
+    add_demo_book(L, "Кнут Д.",
+        "Искусство программирования т.1",
+        "Питер",         2019, "Алгоритмы",         80, SCIENTIFIC, SCI("004.421", 1500));
+    add_demo_book(L, "Фаулер М.",
+        "Рефакторинг",
+        "БХВ-Петербург", 2020, "Программирование",  70, SCIENTIFIC, SCI("004.41",   250));
+    add_demo_book(L, "Ландау Л.",
+        "Теоретическая механика",
+        "Наука",         1988, "Физика",             90, SCIENTIFIC, SCI("531",      450));
+    add_demo_book(L, "Зельдович Я.",
+        "Высшая математика для физиков",
+        "Наука",         2002, "Математика",         55, SCIENTIFIC, SCI("517",      120));
+    add_demo_book(L, "Колмогоров А.",
+        "Теория вероятностей",
+        "Наука",         1999, "Математика",         40, SCIENTIFIC, SCI("519.2",    180));
+    add_demo_book(L, "Гейтс Б.",
+        "Дорога в будущее",
+        "Эксмо",         1995, "Информатика",        25, SCIENTIFIC, SCI("004",       30));
+#undef SCI
+
+    /* ── Художественные ───────────────────────────────────── */
+#define FIC(g, s) \
+    (memset(&e, 0, sizeof e), \
+     strncpy(e.fic.genre,  (g), sizeof e.fic.genre  - 1), \
+     strncpy(e.fic.series, (s), sizeof e.fic.series - 1), e)
+
+    add_demo_book(L, "Толстой Л.Н.",
+        "Война и мир",
+        "АСТ",   1980, "Художественная", 500, FICTION, FIC("Роман-эпопея",   "Собрание сочинений"));
+    add_demo_book(L, "Достоевский Ф.",
+        "Преступление и наказание",
+        "Эксмо", 1975, "Художественная", 400, FICTION, FIC("Роман",           "Классика"));
+    add_demo_book(L, "Булгаков М.",
+        "Мастер и Маргарита",
+        "АСТ",   1990, "Художественная", 350, FICTION, FIC("Сатирич. роман",  "Золотая серия"));
+    add_demo_book(L, "Стругацкий А.",
+        "Пикник на обочине",
+        "АСТ",   2000, "Фантастика",     280, FICTION, FIC("Фантастика",      "Миры Стругацких"));
+    add_demo_book(L, "Лем С.",
+        "Солярис",
+        "Эксмо", 2022, "Фантастика",     160, FICTION, FIC("Фантастика",      "Мастера НФ"));
+#undef FIC
+
+    printf("Добавлено 20 демонстрационных книг.\n");
+    pause_enter();
 }
 
 
@@ -582,24 +803,88 @@ static void query_topic_share(DList *L) {
  *                      УДАЛЕНИЕ
  * ═══════════════════════════════════════════════════════════ */
 
+/* Удаление с интегрированным постраничным просмотром.
+   Пользователь листает список и, не выходя из него, вводит номер строки.
+   После удаления список перерисовывается немедленно. */
 static void remove_book(DList *L) {
     if (!L->count) { puts("Список пуст."); pause_enter(); return; }
-    CLRSCR();
-    puts("=== Удаление книги ===");
-    puts("1. По фамилии автора");
-    puts("2. По названию");
-    int ch = read_int("Выбор");
-    char val[80];
-    int (*pred)(const Book *, const void *) = NULL;
-    if      (ch == 1) { read_str("Фамилия автора", val, sizeof val); pred = pred_author; }
-    else if (ch == 2) { read_str("Название",       val, sizeof val); pred = pred_title;  }
-    else { puts("Отмена."); pause_enter(); return; }
 
-    if (dlist_remove(L, pred, val))
-        puts("Книга удалена.");
-    else
-        puts("Запись не найдена.");
-    pause_enter();
+    int page = 0;
+    char line[32];
+
+    for (;;) {
+        int pages = (int)((L->count + PAGE_SIZE - 1) / PAGE_SIZE);
+        if (page >= pages) page = pages - 1;
+
+        CLRSCR();
+        printf("=== Удаление  [стр. %d / %d,  всего: %zu] ===\n",
+               page + 1, pages, L->count);
+        print_table_header();
+
+        /* Находим начало текущей страницы */
+        DNode *cur = L->head;
+        int start = page * PAGE_SIZE;
+        for (int i = 0; i < start && cur; i++) cur = cur->next;
+
+        DNode *page_start = cur;
+        int row = start;
+        for (int i = 0; i < PAGE_SIZE && cur; i++, cur = cur->next)
+            print_book_row(++row, cur->data);
+        puts(HLINE);
+
+        cur = page_start; row = start;
+        for (int i = 0; i < PAGE_SIZE && cur; i++, cur = cur->next)
+            print_book_extra(++row, cur->data);
+
+        /* Подсказка: можно писать "d3" или "d" (тогда запросит номер) */
+        printf("\n[N]-Вперёд  [P]-Назад  [D<N>]-Удалить  [Q]-Выход > ");
+        fflush(stdout);
+        if (!fgets(line, sizeof line, stdin)) break;
+
+        char cmd = line[0];
+        if      (cmd == 'q' || cmd == 'Q') break;
+        else if (cmd == 'n' || cmd == 'N') { if (page < pages - 1) page++; }
+        else if (cmd == 'p' || cmd == 'P') { if (page > 0) page--; }
+        else if (cmd == 'd' || cmd == 'D') {
+            /* Номер может быть вписан сразу ("d3") или введён отдельно */
+            int n = 0;
+            if (sscanf(line + 1, "%d", &n) != 1 ||
+                    n <= 0 || (size_t)n > L->count) {
+                printf("Номер строки (1–%zu), 0 — отмена: ", L->count);
+                fflush(stdout);
+                char nbuf[16];
+                if (!fgets(nbuf, sizeof nbuf, stdin)) continue;
+                if (sscanf(nbuf, "%d", &n) != 1 ||
+                        n <= 0 || (size_t)n > L->count)
+                    continue;
+            }
+
+            /* O(n) доход до нужного узла */
+            DNode *t = L->head;
+            for (int i = 1; i < n; i++) t = t->next;
+            if (!t) continue;
+
+            /* Подтверждение одной строкой — экран не очищаем */
+            printf("Удалить #%d «", n);
+            u8pad(t->data->author, 16);
+            fputs(" — ", stdout);
+            u8pad(t->data->title, 22);
+            fputs("»? [1=Да / Enter=Нет]: ", stdout);
+            fflush(stdout);
+            char cbuf[8];
+            if (!fgets(cbuf, sizeof cbuf, stdin)) continue;
+            if (cbuf[0] != '1') continue;   /* любой ответ кроме "1" = отмена */
+
+            /* Предикат pred_ptr передаётся параметром — требование задания */
+            Book *target = t->data;
+            if (dlist_remove(L, pred_ptr, target)) {
+                int new_pages = (int)((L->count + PAGE_SIZE - 1) / PAGE_SIZE);
+                if (L->count == 0) { puts("Список пуст."); pause_enter(); break; }
+                if (page >= new_pages) page = new_pages - 1;
+                /* Список перерисовывается на следующей итерации цикла */
+            }
+        }
+    }
 }
 
 
@@ -617,6 +902,7 @@ static void menu_data(DList *L) {
         puts("  3. Удалить книгу");
         puts("  4. Просмотр (вперёд)");
         puts("  5. Просмотр (назад)");
+        puts("  6. Загрузить демо-данные (добавить 20 книг)");
         puts("  0. Назад");
         switch (read_int("Выбор")) {
             case 1: {
@@ -635,6 +921,7 @@ static void menu_data(DList *L) {
             case 3: remove_book(L);   break;
             case 4: view_forward(L);  break;
             case 5: view_backward(L); break;
+            case 6: load_demo_data(L); break;
             case 0: return;
         }
     }
@@ -681,6 +968,8 @@ int main(int argc, char *argv[]) {
     SetConsoleCP(65001);
 #endif
 
+    ensure_data_dir();  /* создаём папку data/ если её ещё нет */
+
     /* Имя файла: argv[1] → с клавиатуры → DEFAULT_FILE */
     char fname[256];
     if (argc > 1) {
@@ -692,8 +981,11 @@ int main(int argc, char *argv[]) {
         fgets(fname, sizeof fname, stdin);
         char *p = strchr(fname, '\n');
         if (p) *p = '\0';
-        if (fname[0] == '\0')
+        if (fname[0] == '\0') {
             strncpy(fname, DEFAULT_FILE, sizeof fname - 1);
+        } else {
+            normalize_fname(fname, sizeof fname);
+        }
     }
 
     DList lib;
