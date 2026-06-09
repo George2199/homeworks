@@ -2,3 +2,6 @@
 
 .vscode/
 build/
+
+# Файлы данных библиотеки (ПР №1 СиОД)
+StructOrgData/1/data/
